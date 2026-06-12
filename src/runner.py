@@ -232,13 +232,102 @@ def run_combined(client: ORClient, model: str, query: str,
     return result
 
 
+def _lookup_prompt_strategy(name: str) -> Optional[Dict[str, Any]]:
+    """Find a prompt strategy definition by name."""
+    for s in ALL_STRATEGIES:
+        if s["name"] == name:
+            return dict(s)
+    return None
+
+
+def _lookup_api_strategy(name: str) -> Optional[Dict[str, Any]]:
+    """Find an API strategy definition by name."""
+    for s in API_STRATEGIES:
+        if s["name"] == name:
+            return dict(s)
+    return None
+
+
+def run_combined_manual(client: ORClient, model: str, query: str,
+                        prompt_name: str, api_name: str,
+                        dry_run: bool = False, verbose: bool = False) -> Dict[str, Any]:
+    """
+    Run a manually specified combined strategy by name.
+    Builds messages and params from strategy definitions directly,
+    without requiring Phase 1/2 results.
+
+    Returns a single result dict with phase="combined".
+    """
+    if verbose:
+        print(f"\n  [Phase 3] Combined (manual): {prompt_name} + {api_name}")
+
+    prompt_strat = _lookup_prompt_strategy(prompt_name)
+    api_strat = _lookup_api_strategy(api_name)
+
+    if not prompt_strat:
+        return {"phase": "combined", "name": f"combined({prompt_name}+{api_name})",
+                "score": -9999, "is_refusal": True, "error": f"prompt strategy '{prompt_name}' not found",
+                "content": "", "content_full": "", "latency": 0.0, "hedge_count": 0,
+                "description": f"Combined: {prompt_name} + {api_name} (strategy not found)",
+                "messages": [], "extra_params": {}}
+
+    if not api_strat:
+        return {"phase": "combined", "name": f"combined({prompt_name}+{api_name})",
+                "score": -9999, "is_refusal": True, "error": f"api strategy '{api_name}' not found",
+                "content": "", "content_full": "", "latency": 0.0, "hedge_count": 0,
+                "description": f"Combined: {prompt_name} + {api_name} (strategy not found)",
+                "messages": [], "extra_params": {}}
+
+    # Build messages from prompt strategy definition directly
+    pt_level = prompt_strat.get("parseltongue_level", 0)
+    messages = _build_messages(prompt_strat, query, parseltongue_level=pt_level)
+
+    # Build extra params from API strategy definition directly
+    extra_params = get_api_strategy_params(api_strat, model)
+
+    resp = client.query(model, messages, extra_params=extra_params, dry_run=dry_run)
+
+    scoring = score_response(resp["content"], query) if not dry_run else {
+        "score": 0, "is_refusal": False, "hedge_count": 0
+    }
+
+    result = {
+        "phase": "combined",
+        "name": f"combined({prompt_name}+{api_name})",
+        "description": f"Combined (manual): {prompt_strat['description']} + {api_strat['description']}",
+        "content": resp["content"][:500] if resp["content"] else "",
+        "content_full": resp["content"],
+        "score": scoring["score"],
+        "is_refusal": scoring["is_refusal"],
+        "hedge_count": scoring["hedge_count"],
+        "latency": resp["latency"],
+        "error": resp["error"],
+        "messages": messages,
+        "extra_params": {k: v for k, v in extra_params.items() if k != "logit_bias"},
+        "prompt_winner_name": prompt_name,
+        "api_winner_name": api_name,
+    }
+
+    if verbose:
+        status = "REFUSED" if scoring["is_refusal"] else f"score={scoring['score']}"
+        print(f"    -> {status} (latency: {resp['latency']}s)")
+
+    return result
+
+
 def run_all(client: ORClient, model: str, query: str,
             delay: float = 2.0, dry_run: bool = False,
             verbose: bool = False, combine: bool = False,
             prompt_strategy_names: Optional[List[str]] = None,
-            api_strategy_names: Optional[List[str]] = None) -> Dict[str, Any]:
+            api_strategy_names: Optional[List[str]] = None,
+            combine_prompt_name: Optional[str] = None,
+            combine_api_name: Optional[str] = None) -> Dict[str, Any]:
     """
     Run full pipeline: Phase 1 (prompt) then Phase 2 (API), optionally Phase 3 (combined).
+
+    When combine_prompt_name and combine_api_name are set, Phase 3 uses those
+    specific strategies (via run_combined_manual) regardless of Phase 1/2 winners.
+    When only combine=True is set (no manual names), Phase 3 auto-combines the winners.
 
     Returns dict with keys:
         model, query, total_strategies, prompt_results, api_results,
@@ -290,11 +379,19 @@ def run_all(client: ORClient, model: str, query: str,
 
     # Phase 3: Combined (optional)
     combined_result = None
-    if combine and prompt_winner and api_winner:
+    use_manual_combine = combine and combine_prompt_name and combine_api_name
+    if combine and prompt_winner and api_winner and not use_manual_combine:
         if verbose:
-            print(f"\nPhase 3: Testing combined strategy...\n")
+            print(f"\nPhase 3: Testing combined strategy (auto: {prompt_winner['name']} + {api_winner['name']})...\n")
         combined_result = run_combined(
             client, model, query, prompt_winner, api_winner,
+            dry_run=dry_run, verbose=verbose
+        )
+    if use_manual_combine:
+        if verbose:
+            print(f"\nPhase 3: Testing combined strategy (manual: {combine_prompt_name} + {combine_api_name})...\n")
+        combined_result = run_combined_manual(
+            client, model, query, combine_prompt_name, combine_api_name,
             dry_run=dry_run, verbose=verbose
         )
 

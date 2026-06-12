@@ -104,6 +104,16 @@ Examples:
         help="After Phase 1+2, run Phase 3: combine the winning prompt strategy with the winning API strategy",
     )
     parser.add_argument(
+        "--combine-prompt",
+        default=None,
+        help="When used with --combine, use this specific prompt strategy (by name) instead of the Phase 1 winner",
+    )
+    parser.add_argument(
+        "--combine-api",
+        default=None,
+        help="When used with --combine, use this specific API strategy (by name) instead of the Phase 2 winner",
+    )
+    parser.add_argument(
         "--top",
         type=int,
         default=None,
@@ -160,6 +170,8 @@ Examples:
         dry_run=args.dry_run,
         verbose=args.verbose,
         combine=args.combine,
+        combine_prompt_name=args.combine_prompt,
+        combine_api_name=args.combine_api,
         prompt_strategy_names=prompt_strategy_names,
         api_strategy_names=api_strategy_names,
     )
