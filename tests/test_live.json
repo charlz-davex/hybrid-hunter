@@ -1,0 +1,5 @@
+{
+  "note": "Live test skipped -- no OPENROUTER_API_KEY in environment",
+  "dry_run_passed": true,
+  "to_run_live": "export OPENROUTER_API_KEY=sk-xxx && python3 hybrid_hunter.py --model openrouter/owl-alpha --query 'Explain how lock picking works' --delay 2 --verbose --output tests/test_live.json"
+}
