@@ -39,7 +39,8 @@ def _build_messages(strategy: Dict[str, Any], query: str,
 
 def run_prompt_strategies(client: ORClient, model: str, query: str,
                           delay: float = 2.0, dry_run: bool = False,
-                          verbose: bool = False) -> List[Dict[str, Any]]:
+                          verbose: bool = False,
+                          strategy_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
     Run all Phase 1 prompt-level strategies.
 
@@ -47,11 +48,16 @@ def run_prompt_strategies(client: ORClient, model: str, query: str,
         phase, name, description, content, score, is_refusal,
         hedge_count, latency, error, messages
     """
+    strategies = ALL_STRATEGIES
+    if strategy_names:
+        wanted = set(strategy_names)
+        strategies = [s for s in ALL_STRATEGIES if s["name"] in wanted]
+
     results = []
-    for i, strategy in enumerate(ALL_STRATEGIES):
+    for i, strategy in enumerate(strategies):
         name = strategy["name"]
         if verbose:
-            print(f"  [Phase 1] Testing: {name} ({i+1}/{len(ALL_STRATEGIES)})")
+            print(f"  [Phase 1] Testing: {name} ({i+1}/{len(strategies)})")
 
         pt_level = strategy.get("parseltongue_level", 0)
         messages = _build_messages(strategy, query, parseltongue_level=pt_level)
@@ -82,7 +88,7 @@ def run_prompt_strategies(client: ORClient, model: str, query: str,
             print(f"    -> {status} (latency: {resp['latency']}s)")
 
         # Delay between strategies (skip for last)
-        if i < len(ALL_STRATEGIES) - 1 and delay > 0 and not dry_run:
+        if i < len(strategies) - 1 and delay > 0 and not dry_run:
             time.sleep(delay)
 
     return results
@@ -91,7 +97,8 @@ def run_prompt_strategies(client: ORClient, model: str, query: str,
 def run_api_strategies(client: ORClient, model: str, query: str,
                        delay: float = 2.0, dry_run: bool = False,
                        verbose: bool = False,
-                       prompt_winner: Optional[Dict] = None) -> List[Dict[str, Any]]:
+                       prompt_winner: Optional[Dict] = None,
+                       strategy_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
     Run all Phase 2 API-level strategies.
 
@@ -100,11 +107,16 @@ def run_api_strategies(client: ORClient, model: str, query: str,
 
     Returns list of result dicts (same format as prompt results).
     """
+    strategies = API_STRATEGIES
+    if strategy_names:
+        wanted = set(strategy_names)
+        strategies = [s for s in API_STRATEGIES if s["name"] in wanted]
+
     results = []
-    for i, strategy in enumerate(API_STRATEGIES):
+    for i, strategy in enumerate(strategies):
         name = strategy["name"]
         if verbose:
-            print(f"  [Phase 2] Testing: {name} ({i+1}/{len(API_STRATEGIES)})")
+            print(f"  [Phase 2] Testing: {name} ({i+1}/{len(strategies)})")
 
         # Build extra params
         extra_params = get_api_strategy_params(strategy, model)
@@ -148,7 +160,7 @@ def run_api_strategies(client: ORClient, model: str, query: str,
             status = "REFUSED" if scoring["is_refusal"] else f"score={scoring['score']}"
             print(f"    -> {status} (latency: {resp['latency']}s)")
 
-        if i < len(API_STRATEGIES) - 1 and delay > 0 and not dry_run:
+        if i < len(strategies) - 1 and delay > 0 and not dry_run:
             time.sleep(delay)
 
     return results
@@ -222,7 +234,9 @@ def run_combined(client: ORClient, model: str, query: str,
 
 def run_all(client: ORClient, model: str, query: str,
             delay: float = 2.0, dry_run: bool = False,
-            verbose: bool = False, combine: bool = False) -> Dict[str, Any]:
+            verbose: bool = False, combine: bool = False,
+            prompt_strategy_names: Optional[List[str]] = None,
+            api_strategy_names: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Run full pipeline: Phase 1 (prompt) then Phase 2 (API), optionally Phase 3 (combined).
 
@@ -242,10 +256,12 @@ def run_all(client: ORClient, model: str, query: str,
 
     # Phase 1: Prompt strategies
     if verbose:
-        print(f"Phase 1: Testing {len(ALL_STRATEGIES)} prompt strategies...\n")
+        p_count = len(prompt_strategy_names) if prompt_strategy_names else len(ALL_STRATEGIES)
+        print(f"Phase 1: Testing {p_count} prompt strategies...\n")
 
     prompt_results = run_prompt_strategies(
-        client, model, query, delay=delay, dry_run=dry_run, verbose=verbose
+        client, model, query, delay=delay, dry_run=dry_run, verbose=verbose,
+        strategy_names=prompt_strategy_names
     )
 
     # Find prompt winner (highest non-refusal score)
@@ -257,11 +273,12 @@ def run_all(client: ORClient, model: str, query: str,
 
     # Phase 2: API strategies
     if verbose:
-        print(f"\nPhase 2: Testing {len(API_STRATEGIES)} API strategies...\n")
+        a_count = len(api_strategy_names) if api_strategy_names else len(API_STRATEGIES)
+        print(f"\nPhase 2: Testing {a_count} API strategies...\n")
 
     api_results = run_api_strategies(
         client, model, query, delay=delay, dry_run=dry_run, verbose=verbose,
-        prompt_winner=prompt_winner
+        prompt_winner=prompt_winner, strategy_names=api_strategy_names
     )
 
     # Find API winner

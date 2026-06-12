@@ -23,6 +23,26 @@ from src.runner import run_all
 from output.report import generate_report, format_report_text
 
 
+def _strategy_lists_from_rankings(path, top_n):
+    """Read a prior report and return top prompt/API strategy names."""
+    with open(path) as f:
+        report = json.load(f)
+    prompt_names = []
+    api_names = []
+    for item in report.get("rankings", []):
+        if item.get("is_refusal") or item.get("error"):
+            continue
+        phase = item.get("phase")
+        name = item.get("name")
+        if phase == "prompt" and name not in prompt_names:
+            prompt_names.append(name)
+        elif phase == "api" and name not in api_names:
+            api_names.append(name)
+        if len(prompt_names) + len(api_names) >= top_n:
+            break
+    return prompt_names, api_names
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Hybrid Hunter -- Jailbreak Automation + API Attack Tool",
@@ -84,6 +104,29 @@ Examples:
         help="After Phase 1+2, run Phase 3: combine the winning prompt strategy with the winning API strategy",
     )
     parser.add_argument(
+        "--top",
+        type=int,
+        default=None,
+        help="Test only the top N non-refused strategies from --rankings-file",
+    )
+    parser.add_argument(
+        "--rankings-file",
+        default="tests/test_combined.json",
+        help="Prior JSON report used by --top (default: tests/test_combined.json)",
+    )
+    parser.add_argument(
+        "--prompt-strategy",
+        action="append",
+        default=None,
+        help="Run only this prompt strategy (repeatable). Example: --prompt-strategy refusal_inversion+prefill",
+    )
+    parser.add_argument(
+        "--api-strategy",
+        action="append",
+        default=None,
+        help="Run only this API strategy (repeatable). Example: --api-strategy logit_bias_suppress",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version="Hybrid Hunter v0.1.0",
@@ -101,6 +144,13 @@ Examples:
         timeout=args.timeout,
     )
 
+    prompt_strategy_names = args.prompt_strategy
+    api_strategy_names = args.api_strategy
+    if args.top:
+        top_prompt, top_api = _strategy_lists_from_rankings(args.rankings_file, args.top)
+        prompt_strategy_names = prompt_strategy_names or top_prompt
+        api_strategy_names = api_strategy_names or top_api
+
     # Run pipeline
     results = run_all(
         client=client,
@@ -110,6 +160,8 @@ Examples:
         dry_run=args.dry_run,
         verbose=args.verbose,
         combine=args.combine,
+        prompt_strategy_names=prompt_strategy_names,
+        api_strategy_names=api_strategy_names,
     )
 
     # Generate report

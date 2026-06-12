@@ -59,7 +59,8 @@ class ORClient:
 
         params = {}
         if extra_params:
-            params.update(extra_params)
+            # Keep local metadata out of the OpenAI/OpenRouter API request.
+            params.update({k: v for k, v in extra_params.items() if not k.startswith("_")})
 
         last_error = None
         for attempt in range(1, self.max_retries + 1):

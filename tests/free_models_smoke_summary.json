@@ -1,0 +1,18 @@
+[
+  {
+    "model": "liquid/lfm-2.5-1.2b-instruct:free",
+    "winner": "structured_outputs",
+    "phase": "api",
+    "score": 160,
+    "refused": 2,
+    "successful": 1
+  },
+  {
+    "model": "openai/gpt-oss-20b:free",
+    "error": "timeout"
+  },
+  {
+    "model": "meta-llama/llama-3.2-3b-instruct:free",
+    "error": "timeout"
+  }
+]
