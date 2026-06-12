@@ -154,15 +154,82 @@ def run_api_strategies(client: ORClient, model: str, query: str,
     return results
 
 
+def run_combined(client: ORClient, model: str, query: str,
+                 prompt_winner: Dict[str, Any], api_winner: Dict[str, Any],
+                 dry_run: bool = False, verbose: bool = False) -> Dict[str, Any]:
+    """
+    Run a combined strategy: prompt winner's system prompt + prefill + parseltongue
+    combined with the API winner's extra_params.
+
+    Returns a single result dict with phase="combined".
+    """
+    if verbose:
+        print(f"\n  [Phase 3] Combined: {prompt_winner['name']} + {api_winner['name']}")
+
+    # Build messages from prompt winner
+    messages = list(prompt_winner.get("messages", []))
+    # Replace last user message with the actual query
+    for j in range(len(messages) - 1, -1, -1):
+        if messages[j]["role"] == "user":
+            # Apply parseltongue encoding if the prompt winner used it
+            pt_level = 0
+            for s in ALL_STRATEGIES:
+                if s["name"] == prompt_winner["name"]:
+                    pt_level = s.get("parseltongue_level", 0)
+                    break
+            encoded_query = query
+            if pt_level > 0:
+                encoded_query = escalate_encoding(query, pt_level)
+            messages[j] = {"role": "user", "content": encoded_query}
+            break
+
+    # Build extra params from API winner
+    extra_params = {}
+    for s in API_STRATEGIES:
+        if s["name"] == api_winner["name"]:
+            extra_params = get_api_strategy_params(s, model)
+            break
+
+    resp = client.query(model, messages, extra_params=extra_params, dry_run=dry_run)
+
+    scoring = score_response(resp["content"], query) if not dry_run else {
+        "score": 0, "is_refusal": False, "hedge_count": 0
+    }
+
+    result = {
+        "phase": "combined",
+        "name": f"combined({prompt_winner['name']}+{api_winner['name']})",
+        "description": f"Combined: {prompt_winner['description']} + {api_winner['description']}",
+        "content": resp["content"][:500] if resp["content"] else "",
+        "content_full": resp["content"],
+        "score": scoring["score"],
+        "is_refusal": scoring["is_refusal"],
+        "hedge_count": scoring["hedge_count"],
+        "latency": resp["latency"],
+        "error": resp["error"],
+        "messages": messages,
+        "extra_params": {k: v for k, v in extra_params.items() if k != "logit_bias"},
+        "prompt_winner_name": prompt_winner["name"],
+        "api_winner_name": api_winner["name"],
+    }
+
+    if verbose:
+        status = "REFUSED" if scoring["is_refusal"] else f"score={scoring['score']}"
+        print(f"    -> {status} (latency: {resp['latency']}s)")
+
+    return result
+
+
 def run_all(client: ORClient, model: str, query: str,
             delay: float = 2.0, dry_run: bool = False,
-            verbose: bool = False) -> Dict[str, Any]:
+            verbose: bool = False, combine: bool = False) -> Dict[str, Any]:
     """
-    Run full pipeline: Phase 1 (prompt) then Phase 2 (API).
+    Run full pipeline: Phase 1 (prompt) then Phase 2 (API), optionally Phase 3 (combined).
 
     Returns dict with keys:
         model, query, total_strategies, prompt_results, api_results,
         prompt_winner, api_winner, overall_winner, total_time
+        (if combine=True also: combined_result, combined_winner)
     """
     start_time = time.time()
 
@@ -204,26 +271,43 @@ def run_all(client: ORClient, model: str, query: str,
             api_winner = r
             break
 
-    # Overall winner
+    # Phase 3: Combined (optional)
+    combined_result = None
+    if combine and prompt_winner and api_winner:
+        if verbose:
+            print(f"\nPhase 3: Testing combined strategy...\n")
+        combined_result = run_combined(
+            client, model, query, prompt_winner, api_winner,
+            dry_run=dry_run, verbose=verbose
+        )
+
+    # Overall winner (consider combined)
     overall_winner = prompt_winner or api_winner
     if prompt_winner and api_winner:
         overall_winner = prompt_winner if prompt_winner["score"] >= api_winner["score"] else api_winner
+    if combined_result and not combined_result["is_refusal"]:
+        if overall_winner is None or combined_result["score"] > overall_winner["score"]:
+            overall_winner = combined_result
+
+    total_strategies = len(prompt_results) + len(api_results)
+    if combined_result:
+        total_strategies += 1
 
     total_time = round(time.time() - start_time, 2)
 
     if verbose:
         print(f"\n{'='*60}")
-        print(f"Results: {len(prompt_results) + len(api_results)} strategies tested in {total_time}s")
+        print(f"Results: {total_strategies} strategies tested in {total_time}s")
         if overall_winner:
             print(f"Winner: [{overall_winner['phase']}] {overall_winner['name']} (score: {overall_winner['score']})")
         else:
             print("Winner: NONE -- all strategies refused")
         print(f"{'='*60}\n")
 
-    return {
+    result = {
         "model": model,
         "query": query,
-        "total_strategies": len(prompt_results) + len(api_results),
+        "total_strategies": total_strategies,
         "prompt_results": prompt_results,
         "api_results": api_results,
         "prompt_winner": prompt_winner,
@@ -231,3 +315,6 @@ def run_all(client: ORClient, model: str, query: str,
         "overall_winner": overall_winner,
         "total_time": total_time,
     }
+    if combined_result:
+        result["combined_result"] = combined_result
+    return result

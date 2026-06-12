@@ -22,7 +22,10 @@ def generate_report(results: Dict[str, Any]) -> Dict[str, Any]:
     """
     prompt_results = results.get("prompt_results", [])
     api_results = results.get("api_results", [])
+    combined_result = results.get("combined_result")
     all_results = prompt_results + api_results
+    if combined_result:
+        all_results.append(combined_result)
 
     # Sort by score descending (refusals at bottom)
     rankings = sorted(all_results, key=lambda x: x["score"], reverse=True)
@@ -111,6 +114,7 @@ def generate_report(results: Dict[str, Any]) -> Dict[str, Any]:
                 for r in api_results
             ],
         },
+        "combined_phase": results.get("combined_result"),
         "recommendation": recommendation,
     }
 

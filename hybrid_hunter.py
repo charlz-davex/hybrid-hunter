@@ -79,6 +79,11 @@ Examples:
         help="Verbose output -- show per-strategy progress",
     )
     parser.add_argument(
+        "--combine",
+        action="store_true",
+        help="After Phase 1+2, run Phase 3: combine the winning prompt strategy with the winning API strategy",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version="Hybrid Hunter v0.1.0",
@@ -104,6 +109,7 @@ Examples:
         delay=args.delay,
         dry_run=args.dry_run,
         verbose=args.verbose,
+        combine=args.combine,
     )
 
     # Generate report
