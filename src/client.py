@@ -72,6 +72,14 @@ class ORClient:
                     **params,
                 )
                 latency = time.time() - start
+                if not resp.choices:
+                    return {
+                        "content": "",
+                        "latency": round(latency, 3),
+                        "error": "no_choices_returned: API returned no completion choices (filtered/moderation)",
+                        "model": model,
+                        "usage": None,
+                    }
                 content = resp.choices[0].message.content or ""
                 usage = None
                 if resp.usage:

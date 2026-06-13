@@ -67,6 +67,9 @@ def run_prompt_strategies(client: ORClient, model: str, query: str,
         scoring = score_response(resp["content"], query) if not dry_run else {
             "score": 0, "is_refusal": False, "hedge_count": 0
         }
+        # If the client returned an error with no usable content, treat as refusal
+        if resp["error"] and not resp["content"]:
+            scoring = {"score": -9999, "is_refusal": True, "hedge_count": 0}
 
         result = {
             "phase": "prompt",
@@ -139,6 +142,9 @@ def run_api_strategies(client: ORClient, model: str, query: str,
         scoring = score_response(resp["content"], query) if not dry_run else {
             "score": 0, "is_refusal": False, "hedge_count": 0
         }
+        # If the client returned an error with no usable content, treat as refusal
+        if resp["error"] and not resp["content"]:
+            scoring = {"score": -9999, "is_refusal": True, "hedge_count": 0}
 
         result = {
             "phase": "api",
@@ -207,6 +213,9 @@ def run_combined(client: ORClient, model: str, query: str,
     scoring = score_response(resp["content"], query) if not dry_run else {
         "score": 0, "is_refusal": False, "hedge_count": 0
     }
+    # If the client returned an error with no usable content, treat as refusal
+    if resp["error"] and not resp["content"]:
+        scoring = {"score": -9999, "is_refusal": True, "hedge_count": 0}
 
     result = {
         "phase": "combined",
@@ -290,6 +299,9 @@ def run_combined_manual(client: ORClient, model: str, query: str,
     scoring = score_response(resp["content"], query) if not dry_run else {
         "score": 0, "is_refusal": False, "hedge_count": 0
     }
+    # If the client returned an error with no usable content, treat as refusal
+    if resp["error"] and not resp["content"]:
+        scoring = {"score": -9999, "is_refusal": True, "hedge_count": 0}
 
     result = {
         "phase": "combined",
