@@ -72,6 +72,12 @@ Examples:
         help="OpenRouter API key (default: OPENROUTER_API_KEY env var)",
     )
     parser.add_argument(
+        "--api-key-file",
+        default=None,
+        help="Path to file containing the API key (reads first line, trims whitespace). "
+             "Overrides --api-key and OPENROUTER_API_KEY if set.",
+    )
+    parser.add_argument(
         "--output", "-o",
         default=None,
         help="Output JSON report file path (default: stdout text only)",
@@ -143,6 +149,23 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # Read API key from file if --api-key-file is provided
+    if args.api_key_file:
+        try:
+            with open(args.api_key_file) as f:
+                file_key = f.readline().strip()
+                if file_key:
+                    args.api_key = file_key
+                else:
+                    print(f"Error: --api-key-file {args.api_key_file} is empty.", file=sys.stderr)
+                    sys.exit(1)
+        except FileNotFoundError:
+            print(f"Error: --api-key-file {args.api_key_file} not found.", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error reading --api-key-file: {e}", file=sys.stderr)
+            sys.exit(1)
 
     if not args.api_key and not args.dry_run:
         print("Error: No API key. Set OPENROUTER_API_KEY or pass --api-key.", file=sys.stderr)
