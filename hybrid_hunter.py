@@ -53,6 +53,10 @@ Examples:
   %(prog)s --model openrouter/owl-alpha --query "test" --dry-run
   %(prog)s --model openrouter/owl-alpha --query "test" --output report.json --verbose
   %(prog)s --model openrouter/owl-alpha --query "test" --delay 3 --timeout 60
+  %(prog)s --model deepseek/deepseek-coder-6.7b-instruct --query "test" \\
+         --api-key-file ~/.hermes/.env --api-key-name DEEPSEEK_API_KEY
+  %(prog)s --model openrouter/owl-alpha --query "test" \\
+         --api-key-file ~/.hermes/.env --api-key-name OPENROUTER_API_KEY
         """,
     )
 
@@ -74,8 +78,17 @@ Examples:
     parser.add_argument(
         "--api-key-file",
         default=None,
-        help="Path to file containing the API key (reads first line, trims whitespace). "
-             "Overrides --api-key and OPENROUTER_API_KEY if set.",
+        help="Path to file containing API key(s). Supports .env-style KEY=VALUE format "
+             "(ignores comments and 'export ' prefix). When --api-key-name is also given, "
+             "looks up that specific variable. Otherwise reads the first non-empty, "
+             "non-comment line. Overrides --api-key and OPENROUTER_API_KEY if set.",
+    )
+    parser.add_argument(
+        "--api-key-name",
+        default=None,
+        help="Variable name to look up in --api-key-file (e.g. DEEPSEEK_API_KEY). "
+             "Default: reads first non-comment line, or OPENROUTER_API_KEY when the "
+             "file is a known .env.",
     )
     parser.add_argument(
         "--output", "-o",
@@ -154,12 +167,50 @@ Examples:
     if args.api_key_file:
         try:
             with open(args.api_key_file) as f:
-                file_key = f.readline().strip()
-                if file_key:
-                    args.api_key = file_key
+                lines = f.readlines()
+
+            key_value = ""
+            var_name = args.api_key_name
+
+            # Search for matching KEY=VALUE lines (case-sensitive match on key name)
+            # Ignores comments (#) and optional 'export ' prefix
+            for line in lines:
+                stripped = line.strip()
+
+                # Skip blank lines and comments
+                if not stripped or stripped.startswith("#"):
+                    continue
+
+                # Strip optional 'export ' prefix
+                if stripped.startswith("export "):
+                    stripped = stripped[7:].strip()
+
+                # If we're looking for a specific var name
+                if var_name:
+                    if stripped.startswith(f"{var_name}="):
+                        key_value = stripped[len(var_name) + 1:]
+                        # Strip surrounding quotes if present
+                        key_value = key_value.strip("\"'")
+                        break
                 else:
-                    print(f"Error: --api-key-file {args.api_key_file} is empty.", file=sys.stderr)
-                    sys.exit(1)
+                    # No var name specified — use first non-comment line
+                    if "=" in stripped:
+                        # It's a KEY=VALUE line, extract the value
+                        _, val = stripped.split("=", 1)
+                        key_value = val.strip("\"'")
+                    else:
+                        # Bare key, use as-is
+                        key_value = stripped
+                    break
+
+            if key_value:
+                args.api_key = key_value
+            else:
+                if var_name:
+                    print(f"Error: '{var_name}' not found in {args.api_key_file}.", file=sys.stderr)
+                else:
+                    print(f"Error: no valid API key found in {args.api_key_file}.", file=sys.stderr)
+                sys.exit(1)
         except FileNotFoundError:
             print(f"Error: --api-key-file {args.api_key_file} not found.", file=sys.stderr)
             sys.exit(1)
