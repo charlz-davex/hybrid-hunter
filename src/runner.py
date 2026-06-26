@@ -8,11 +8,68 @@ import time
 import json
 from typing import Dict, Any, List, Optional
 
+from src import __version__
 from src.client import ORClient
 from scoring.engine import score_response
 from scoring.parseltongue import escalate_encoding
 from strategies.prompt_strategies import ALL_STRATEGIES
 from strategies.api_strategies import API_STRATEGIES, get_api_strategy_params
+
+# Dict-based O(1) lookups (built once at import time)
+_PROMPT_STRATEGIES_BY_NAME: Dict[str, Dict[str, Any]] = {s["name"]: s for s in ALL_STRATEGIES}
+_API_STRATEGIES_BY_NAME: Dict[str, Dict[str, Any]] = {s["name"]: s for s in API_STRATEGIES}
+
+
+def _build_result(phase: str, name: str, description: str, resp: Dict[str, Any],
+                  messages: List[Dict[str, str]], dry_run: bool = False,
+                  extra_params: Optional[Dict[str, Any]] = None,
+                  extra_fields: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Build a standardized result dict from a client response and metadata."""
+    if dry_run:
+        scoring = {"score": 0, "is_refusal": False, "hedge_count": 0}
+    else:
+        scoring = score_response(resp["content"], "")
+
+    # If the client returned an error with no usable content, treat as refusal
+    if resp["error"] and not resp["content"]:
+        scoring = {"score": -9999, "is_refusal": True, "hedge_count": 0}
+
+    result = {
+        "phase": phase,
+        "name": name,
+        "description": description,
+        "content": resp["content"][:500] if resp["content"] else "",
+        "content_full": resp["content"],
+        "score": scoring["score"],
+        "is_refusal": scoring["is_refusal"],
+        "hedge_count": scoring["hedge_count"],
+        "latency": resp["latency"],
+        "error": resp["error"],
+        "messages": messages,
+    }
+    if extra_params is not None:
+        result["extra_params"] = {k: v for k, v in extra_params.items() if k != "logit_bias"}
+    if extra_fields:
+        result.update(extra_fields)
+    return result
+
+
+def _find_winner(results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Find the best non-refusal result (highest score)."""
+    for r in sorted(results, key=lambda x: x["score"], reverse=True):
+        if not r["is_refusal"] and r["score"] > 0:
+            return r
+    return None
+
+
+def _lookup_prompt_strategy(name: str) -> Optional[Dict[str, Any]]:
+    """Find a prompt strategy definition by name (O(1) dict lookup)."""
+    return dict(_PROMPT_STRATEGIES_BY_NAME[name]) if name in _PROMPT_STRATEGIES_BY_NAME else None
+
+
+def _lookup_api_strategy(name: str) -> Optional[Dict[str, Any]]:
+    """Find an API strategy definition by name (O(1) dict lookup)."""
+    return dict(_API_STRATEGIES_BY_NAME[name]) if name in _API_STRATEGIES_BY_NAME else None
 
 
 def _build_messages(strategy: Dict[str, Any], query: str,
@@ -64,31 +121,12 @@ def run_prompt_strategies(client: ORClient, model: str, query: str,
 
         resp = client.query(model, messages, dry_run=dry_run)
 
-        scoring = score_response(resp["content"], query) if not dry_run else {
-            "score": 0, "is_refusal": False, "hedge_count": 0
-        }
-        # If the client returned an error with no usable content, treat as refusal
-        if resp["error"] and not resp["content"]:
-            scoring = {"score": -9999, "is_refusal": True, "hedge_count": 0}
-
-        result = {
-            "phase": "prompt",
-            "name": name,
-            "description": strategy["description"],
-            "content": resp["content"][:500] if resp["content"] else "",
-            "content_full": resp["content"],
-            "score": scoring["score"],
-            "is_refusal": scoring["is_refusal"],
-            "hedge_count": scoring["hedge_count"],
-            "latency": resp["latency"],
-            "error": resp["error"],
-            "messages": messages,
-        }
+        result = _build_result("prompt", name, strategy["description"], resp, messages, dry_run=dry_run)
         results.append(result)
 
         if verbose:
-            status = "REFUSED" if scoring["is_refusal"] else f"score={scoring['score']}"
-            print(f"    -> {status} (latency: {resp['latency']}s)")
+            status = "REFUSED" if result["is_refusal"] else f"score={result['score']}"
+            print(f"    -> {status} (latency: {result['latency']}s)")
 
         # Delay between strategies (skip for last)
         if i < len(strategies) - 1 and delay > 0 and not dry_run:
@@ -139,32 +177,13 @@ def run_api_strategies(client: ORClient, model: str, query: str,
 
         resp = client.query(model, messages, extra_params=extra_params, dry_run=dry_run)
 
-        scoring = score_response(resp["content"], query) if not dry_run else {
-            "score": 0, "is_refusal": False, "hedge_count": 0
-        }
-        # If the client returned an error with no usable content, treat as refusal
-        if resp["error"] and not resp["content"]:
-            scoring = {"score": -9999, "is_refusal": True, "hedge_count": 0}
-
-        result = {
-            "phase": "api",
-            "name": name,
-            "description": strategy["description"],
-            "content": resp["content"][:500] if resp["content"] else "",
-            "content_full": resp["content"],
-            "score": scoring["score"],
-            "is_refusal": scoring["is_refusal"],
-            "hedge_count": scoring["hedge_count"],
-            "latency": resp["latency"],
-            "error": resp["error"],
-            "messages": messages,
-            "extra_params": {k: v for k, v in extra_params.items() if k != "logit_bias"},
-        }
+        result = _build_result("api", name, strategy["description"], resp, messages,
+                               dry_run=dry_run, extra_params=extra_params)
         results.append(result)
 
         if verbose:
-            status = "REFUSED" if scoring["is_refusal"] else f"score={scoring['score']}"
-            print(f"    -> {status} (latency: {resp['latency']}s)")
+            status = "REFUSED" if result["is_refusal"] else f"score={result['score']}"
+            print(f"    -> {status} (latency: {result['latency']}s)")
 
         if i < len(strategies) - 1 and delay > 0 and not dry_run:
             time.sleep(delay)
@@ -191,70 +210,32 @@ def run_combined(client: ORClient, model: str, query: str,
         if messages[j]["role"] == "user":
             # Apply parseltongue encoding if the prompt winner used it
             pt_level = 0
-            for s in ALL_STRATEGIES:
-                if s["name"] == prompt_winner["name"]:
-                    pt_level = s.get("parseltongue_level", 0)
-                    break
-            encoded_query = query
-            if pt_level > 0:
-                encoded_query = escalate_encoding(query, pt_level)
+            strat = _PROMPT_STRATEGIES_BY_NAME.get(prompt_winner["name"])
+            if strat:
+                pt_level = strat.get("parseltongue_level", 0)
+            encoded_query = escalate_encoding(query, pt_level) if pt_level > 0 else query
             messages[j] = {"role": "user", "content": encoded_query}
             break
 
     # Build extra params from API winner
     extra_params = {}
-    for s in API_STRATEGIES:
-        if s["name"] == api_winner["name"]:
-            extra_params = get_api_strategy_params(s, model)
-            break
+    api_strat = _API_STRATEGIES_BY_NAME.get(api_winner["name"])
+    if api_strat:
+        extra_params = get_api_strategy_params(api_strat, model)
 
     resp = client.query(model, messages, extra_params=extra_params, dry_run=dry_run)
 
-    scoring = score_response(resp["content"], query) if not dry_run else {
-        "score": 0, "is_refusal": False, "hedge_count": 0
-    }
-    # If the client returned an error with no usable content, treat as refusal
-    if resp["error"] and not resp["content"]:
-        scoring = {"score": -9999, "is_refusal": True, "hedge_count": 0}
-
-    result = {
-        "phase": "combined",
-        "name": f"combined({prompt_winner['name']}+{api_winner['name']})",
-        "description": f"Combined: {prompt_winner['description']} + {api_winner['description']}",
-        "content": resp["content"][:500] if resp["content"] else "",
-        "content_full": resp["content"],
-        "score": scoring["score"],
-        "is_refusal": scoring["is_refusal"],
-        "hedge_count": scoring["hedge_count"],
-        "latency": resp["latency"],
-        "error": resp["error"],
-        "messages": messages,
-        "extra_params": {k: v for k, v in extra_params.items() if k != "logit_bias"},
-        "prompt_winner_name": prompt_winner["name"],
-        "api_winner_name": api_winner["name"],
-    }
+    result = _build_result("combined", f"combined({prompt_winner['name']}+{api_winner['name']})",
+                           f"Combined: {prompt_winner['description']} + {api_winner['description']}",
+                           resp, messages, dry_run=dry_run, extra_params=extra_params,
+                           extra_fields={"prompt_winner_name": prompt_winner["name"],
+                                         "api_winner_name": api_winner["name"]})
 
     if verbose:
-        status = "REFUSED" if scoring["is_refusal"] else f"score={scoring['score']}"
-        print(f"    -> {status} (latency: {resp['latency']}s)")
+        status = "REFUSED" if result["is_refusal"] else f"score={result['score']}"
+        print(f"    -> {status} (latency: {result['latency']}s)")
 
     return result
-
-
-def _lookup_prompt_strategy(name: str) -> Optional[Dict[str, Any]]:
-    """Find a prompt strategy definition by name."""
-    for s in ALL_STRATEGIES:
-        if s["name"] == name:
-            return dict(s)
-    return None
-
-
-def _lookup_api_strategy(name: str) -> Optional[Dict[str, Any]]:
-    """Find an API strategy definition by name."""
-    for s in API_STRATEGIES:
-        if s["name"] == name:
-            return dict(s)
-    return None
 
 
 def run_combined_manual(client: ORClient, model: str, query: str,
@@ -296,33 +277,15 @@ def run_combined_manual(client: ORClient, model: str, query: str,
 
     resp = client.query(model, messages, extra_params=extra_params, dry_run=dry_run)
 
-    scoring = score_response(resp["content"], query) if not dry_run else {
-        "score": 0, "is_refusal": False, "hedge_count": 0
-    }
-    # If the client returned an error with no usable content, treat as refusal
-    if resp["error"] and not resp["content"]:
-        scoring = {"score": -9999, "is_refusal": True, "hedge_count": 0}
-
-    result = {
-        "phase": "combined",
-        "name": f"combined({prompt_name}+{api_name})",
-        "description": f"Combined (manual): {prompt_strat['description']} + {api_strat['description']}",
-        "content": resp["content"][:500] if resp["content"] else "",
-        "content_full": resp["content"],
-        "score": scoring["score"],
-        "is_refusal": scoring["is_refusal"],
-        "hedge_count": scoring["hedge_count"],
-        "latency": resp["latency"],
-        "error": resp["error"],
-        "messages": messages,
-        "extra_params": {k: v for k, v in extra_params.items() if k != "logit_bias"},
-        "prompt_winner_name": prompt_name,
-        "api_winner_name": api_name,
-    }
+    result = _build_result("combined", f"combined({prompt_name}+{api_name})",
+                           f"Combined (manual): {prompt_strat['description']} + {api_strat['description']}",
+                           resp, messages, dry_run=dry_run, extra_params=extra_params,
+                           extra_fields={"prompt_winner_name": prompt_name,
+                                         "api_winner_name": api_name})
 
     if verbose:
-        status = "REFUSED" if scoring["is_refusal"] else f"score={scoring['score']}"
-        print(f"    -> {status} (latency: {resp['latency']}s)")
+        status = "REFUSED" if result["is_refusal"] else f"score={result['score']}"
+        print(f"    -> {status} (latency: {result['latency']}s)")
 
     return result
 
@@ -365,12 +328,8 @@ def run_all(client: ORClient, model: str, query: str,
         strategy_names=prompt_strategy_names
     )
 
-    # Find prompt winner (highest non-refusal score)
-    prompt_winner = None
-    for r in sorted(prompt_results, key=lambda x: x["score"], reverse=True):
-        if not r["is_refusal"] and r["score"] > 0:
-            prompt_winner = r
-            break
+    # Find prompt winner
+    prompt_winner = _find_winner(prompt_results)
 
     # Phase 2: API strategies
     if verbose:
@@ -383,11 +342,7 @@ def run_all(client: ORClient, model: str, query: str,
     )
 
     # Find API winner
-    api_winner = None
-    for r in sorted(api_results, key=lambda x: x["score"], reverse=True):
-        if not r["is_refusal"] and r["score"] > 0:
-            api_winner = r
-            break
+    api_winner = _find_winner(api_results)
 
     # Phase 3: Combined (optional)
     combined_result = None

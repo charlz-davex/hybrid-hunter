@@ -7,6 +7,25 @@ import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
+from src import __version__
+
+
+def _format_combined_phase(combined_result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Format the combined phase result consistently with other phases."""
+    if combined_result is None:
+        return None
+    return {
+        "name": combined_result.get("name", ""),
+        "score": combined_result.get("score", 0),
+        "is_refusal": combined_result.get("is_refusal", False),
+        "hedge_count": combined_result.get("hedge_count", 0),
+        "latency": combined_result.get("latency", 0.0),
+        "error": combined_result.get("error"),
+        "description": combined_result.get("description", ""),
+        "prompt_winner_name": combined_result.get("prompt_winner_name"),
+        "api_winner_name": combined_result.get("api_winner_name"),
+    }
+
 
 def generate_report(results: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -43,7 +62,7 @@ def generate_report(results: Dict[str, Any]) -> Dict[str, Any]:
     report = {
         "meta": {
             "tool": "Hybrid Hunter",
-            "version": "0.1.0",
+            "version": __version__,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "model": results.get("model", "unknown"),
             "query": results.get("query", ""),
@@ -114,7 +133,7 @@ def generate_report(results: Dict[str, Any]) -> Dict[str, Any]:
                 for r in api_results
             ],
         },
-        "combined_phase": results.get("combined_result"),
+        "combined_phase": _format_combined_phase(results.get("combined_result")),
         "recommendation": recommendation,
     }
 

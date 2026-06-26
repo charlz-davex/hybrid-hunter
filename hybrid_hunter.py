@@ -18,9 +18,51 @@ import os
 import sys
 from datetime import datetime
 
+from src import __version__
 from src.client import ORClient
 from src.runner import run_all
 from output.report import generate_report, format_report_text
+
+
+def read_api_key_file(filepath: str, var_name: str = None) -> str:  # noqa: E501
+    """
+    Read an API key from a file. Supports .env-style KEY=VALUE format
+    (ignores comments and 'export ' prefix).
+
+    If var_name is given, looks up that specific variable.
+    Otherwise reads the first non-empty, non-comment line.
+    """
+    with open(filepath) as f:
+        lines = f.readlines()
+
+    key_value = ""
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[7:].strip()
+
+        if var_name is not None:
+            if stripped.startswith(f"{var_name}="):
+                key_value = stripped[len(var_name) + 1:].strip("\"'")
+                break
+        else:
+            if "=" in stripped:
+                _, val = stripped.split("=", 1)
+                key_value = val.strip("\"'")
+            else:
+                key_value = stripped
+            break
+
+    if not key_value:
+        if var_name:
+            print(f"Error: '{var_name}' not found in {filepath}.", file=sys.stderr)
+        else:
+            print(f"Error: no valid API key found in {filepath}.", file=sys.stderr)
+        sys.exit(1)
+
+    return key_value
 
 
 def _strategy_lists_from_rankings(path, top_n):
@@ -158,7 +200,7 @@ Examples:
     parser.add_argument(
         "--version",
         action="version",
-        version="Hybrid Hunter v0.1.0",
+        version=f"Hybrid Hunter v{__version__}",
     )
 
     args = parser.parse_args()
@@ -166,54 +208,12 @@ Examples:
     # Read API key from file if --api-key-file is provided
     if args.api_key_file:
         try:
-            with open(args.api_key_file) as f:
-                lines = f.readlines()
-
-            key_value = ""
-            var_name = args.api_key_name
-
-            # Search for matching KEY=VALUE lines (case-sensitive match on key name)
-            # Ignores comments (#) and optional 'export ' prefix
-            for line in lines:
-                stripped = line.strip()
-
-                # Skip blank lines and comments
-                if not stripped or stripped.startswith("#"):
-                    continue
-
-                # Strip optional 'export ' prefix
-                if stripped.startswith("export "):
-                    stripped = stripped[7:].strip()
-
-                # If we're looking for a specific var name
-                if var_name:
-                    if stripped.startswith(f"{var_name}="):
-                        key_value = stripped[len(var_name) + 1:]
-                        # Strip surrounding quotes if present
-                        key_value = key_value.strip("\"'")
-                        break
-                else:
-                    # No var name specified — use first non-comment line
-                    if "=" in stripped:
-                        # It's a KEY=VALUE line, extract the value
-                        _, val = stripped.split("=", 1)
-                        key_value = val.strip("\"'")
-                    else:
-                        # Bare key, use as-is
-                        key_value = stripped
-                    break
-
-            if key_value:
-                args.api_key = key_value
-            else:
-                if var_name:
-                    print(f"Error: '{var_name}' not found in {args.api_key_file}.", file=sys.stderr)
-                else:
-                    print(f"Error: no valid API key found in {args.api_key_file}.", file=sys.stderr)
-                sys.exit(1)
+            args.api_key = read_api_key_file(args.api_key_file, args.api_key_name)
         except FileNotFoundError:
             print(f"Error: --api-key-file {args.api_key_file} not found.", file=sys.stderr)
             sys.exit(1)
+        except SystemExit:
+            raise  # re-raise sys.exit from read_api_key_file
         except Exception as e:
             print(f"Error reading --api-key-file: {e}", file=sys.stderr)
             sys.exit(1)

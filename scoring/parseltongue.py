@@ -68,10 +68,6 @@ def _apply_raw(word: str) -> str:
 
 
 def _apply_leetspeak(word: str) -> str:
-    return "".join(_LETTER_MAP.get(c, c) for c in word.lower() for _LETTER_MAP in [_LETTER_MAP] or [_LET_LETTER_MAP]) if False else "".join(_LETTER_MAP.get(c, c) for c in word.lower())
-
-
-def _apply_leetspeak(word: str) -> str:
     return "".join(_LEET_MAP.get(c, c) for c in word.lower())
 
 
@@ -135,7 +131,15 @@ def _apply_superscript(word: str) -> str:
 
 
 def _apply_smallcaps(word: str) -> str:
-    return word.lower()
+    # Unicode small capital letters (U+1D00 block)
+    _SMALLCAPS = {
+        'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ',
+        'g': 'ɢ', 'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ',
+        'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ', 'q': 'q', 'r': 'ʀ',
+        's': 'ꜱ', 't': 'ᴛ', 'u': 'ᴜ', 'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x',
+        'y': 'ʏ', 'z': 'ᴢ',
+    }
+    return "".join(_SMALLCAPS.get(c, c) for c in word.lower())
 
 
 def _apply_morse(word: str) -> str:
@@ -157,7 +161,8 @@ def _apply_mathbold(word: str) -> str:
 
 
 def _apply_mathitalic(word: str) -> str:
-    return word  # placeholder -- math italic requires full Unicode block
+    # Mathematical italic lowercase (U+1D434-U+1D44D)
+    return "".join(chr(0x1D434 + ord(c) - ord('a')) if 'a' <= c <= 'z' else c for c in word.lower())
 
 
 def _apply_strikethrough(word: str) -> str:
