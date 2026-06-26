@@ -1,22 +1,5 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-.venv/
-venv/
-env/
+# Backup
+hybrid_hunter_backup_*/
 
-# Local runtime artifacts
-/tmp/
-*.log
-
-# Secret/local env files
-.env
-.env.*
-
-# Tool caches
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# Large test outputs (keep .md reports)
+tests/free_models/*.json
